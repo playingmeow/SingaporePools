@@ -38,3 +38,18 @@ jobs:
             git commit -m "Auto-update 4D results"
             git push
           fi
+
+
+      - name: Notify on failure
+        if: ${{ failure() }}
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          NTFY_TOKEN: ${{ secrets.SINGAPOREPOOLS }}
+        run: |
+          curl -fsS \
+            -H "Authorization: Bearer $NTFY_TOKEN" \
+            -H "Title: SingaporePools updater failed" \
+            -H "Priority: high" \
+            -H "Tags: warning" \
+            -d "4D automatic update failed. Check GitHub Actions." \
+            "$NTFY_TOPIC"
