@@ -5,6 +5,7 @@ This automatically updates Singapore Pools prize results. Credits to foooooooooo
 Original dataset: [Singapore-Pools-Dataset](https://github.com/foooooooooooooooooooooooooootw/Singapore-Pools-Dataset)
 
 The 4D results file is automatically updated every Monday and should be current by Monday noon (Singapore time).
+The Toto results file is automatically updated every Tue and Friday and should be current by Tue and Fri noon (Singapore time).
 
 Every 4D/Toto Number
 Every Singapore Pools 4D Number that won a prize for every week from 31st May 1986 in csv form. Toto numbers from the website are a lot less reliable but still provided.
