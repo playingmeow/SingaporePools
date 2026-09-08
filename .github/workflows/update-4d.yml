@@ -25,7 +25,7 @@ jobs:
           python-version: "3.12"
 
       - name: Update 4D results
-        run: python DOES_NOT_EXIST.py
+        run: python update_4d.py --csv 4d_prizes.csv
 
       - name: Commit updated results
         run: |
