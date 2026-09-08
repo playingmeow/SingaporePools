@@ -1,0 +1,40 @@
+name: Update TOTO results
+
+on:
+  workflow_dispatch:
+
+  schedule:
+    # Tuesday & Friday 9:15 AM Singapore time = 1:15 AM UTC
+    - cron: "15 1 * * 2,5"
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Update TOTO results
+        run: python update_toto.py --csv toto_prizes.csv
+
+      - name: Commit updated results
+        run: |
+          if git diff --quiet -- toto_prizes.csv; then
+            echo "No new TOTO results. Nothing to commit."
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add toto_prizes.csv
+            git commit -m "Auto-update TOTO results"
+            git push
+          fi
