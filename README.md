@@ -1,13 +1,23 @@
 # SingaporePools
 
-This automatically updates Singapore Pools prize results. Credits to foooooooooooooooooooooooooootw, who maintained this until Jul 2026, when I chanced upon it.
+This repository automatically updates Singapore Pools 4D and TOTO prize results.
+
+Credits to [foooooooooooooooooooooooooootw](https://github.com/foooooooooooooooooooooooooootw), who maintained the original dataset until Jul 2026, when I chanced upon it on 1 Sep 2026.
 
 Original dataset: [Singapore-Pools-Dataset](https://github.com/foooooooooooooooooooooooooootw/Singapore-Pools-Dataset)
 
-The 4D results file is automatically updated every Monday and should be current by Monday noon (Singapore time).
-The Toto results file is automatically updated every Tue and Friday and should be current by Tue and Fri noon (Singapore time).
+## Updates
 
-Every 4D/Toto Number
-Every Singapore Pools 4D Number that won a prize for every week from 31st May 1986 in csv form. Toto numbers from the website are a lot less reliable but still provided.
-Toto numbers that are single digit are padded with a leading zero. You might notice the toto numbers only start from 1001, and the year is 0001. I presume it's a data entry error on their behalf, or maybe they are missing some info. Draws that have "NaN" are the result of their website returning an error only for that draw.
-Your csv viewer may omit leading zeroes.
+The 4D results file is automatically updated every Monday and should be current by Monday noon (Singapore time).
+
+The TOTO results file is automatically updated every Tuesday and Friday and should be current by noon on those days (Singapore time).
+
+## Dataset notes
+
+The 4D dataset contains Singapore Pools 4D prize-winning numbers from 31 May 1986 onward.
+
+TOTO numbers that are single digit are padded with a leading zero.
+
+The inherited TOTO dataset starts from draw 1001. Some early rows contain the year `0001`, and some historical draws contain `NaN`. These were already present in the original dataset and appear to be due to incomplete or erroneous data returned by the Singapore Pools website.
+
+Your CSV viewer may omit leading zeroes.
