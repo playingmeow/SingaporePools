@@ -1,0 +1,40 @@
+name: Update 4D results
+
+on:
+  workflow_dispatch:
+
+  schedule:
+    # Monday 9:15 AM Singapore time = Monday 1:15 AM UTC
+    - cron: "15 1 * * 1"
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Update 4D results
+        run: python update_4d.py --csv 4d_prizes.csv
+
+      - name: Commit updated results
+        run: |
+          if git diff --quiet -- 4d_prizes.csv; then
+            echo "No new 4D results. Nothing to commit."
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add 4d_prizes.csv
+            git commit -m "Auto-update 4D results"
+            git push
+          fi
