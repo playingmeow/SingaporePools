@@ -39,6 +39,22 @@ jobs:
             git push
           fi
 
+      - name: Notify on success
+        if: ${{ success() }}
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          NTFY_TOKEN: ${{ secrets.SINGAPOREPOOLS }}
+        run: |
+          LATEST_DRAW=$(tail -n +2 toto_prizes.csv | cut -d',' -f1 | tail -n 1)
+
+          curl -fsS \
+            -H "Authorization: Bearer $NTFY_TOKEN" \
+            -H "Title: SingaporePools TOTO updated" \
+            -H "Priority: default" \
+            -H "Tags: white_check_mark" \
+            -d "TOTO dataset updated. Current through Draw $LATEST_DRAW." \
+            "$NTFY_TOPIC"
+
       - name: Notify on failure
         if: ${{ failure() }}
         env:
