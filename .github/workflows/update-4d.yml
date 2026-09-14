@@ -4,8 +4,8 @@ on:
   workflow_dispatch:
 
   schedule:
-    # Monday 6:15 AM Singapore time = Sunday 10:15 PM UTC
-    - cron: "15 22 * * 0"
+    # Thur, Sunday and Monday 6:15 AM Singapore time = Wed, Sat, Sunday 10:15 PM UTC
+    - cron: "15 22 * * 0,3,6"
 
 permissions:
   contents: write
