@@ -4,8 +4,8 @@ on:
   workflow_dispatch:
 
   schedule:
-    # Thur, Sunday and Monday 6:15 AM Singapore time = Wed, Sat, Sunday 10:15 PM UTC
-    - cron: "15 22 * * 0,3,6"
+   # Thu, Sunday and Monday 6:15 AM Singapore time = Wed, Sat, Sun 10:15 PM UTC
+     - cron: "15 22 * * 0,3,6"
 
 permissions:
   contents: write
@@ -38,6 +38,22 @@ jobs:
             git commit -m "Auto-update 4D results"
             git push
           fi
+
+      - name: Notify on success
+        if: ${{ success() }}
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          NTFY_TOKEN: ${{ secrets.SINGAPOREPOOLS }}
+        run: |
+          LATEST_DRAW=$(tail -n +2 4d_prizes.csv | cut -d',' -f1 | tail -n 1)
+
+          curl -fsS \
+            -H "Authorization: Bearer $NTFY_TOKEN" \
+            -H "Title: SingaporePools 4D updated" \
+            -H "Priority: default" \
+            -H "Tags: white_check_mark" \
+            -d "4D dataset updated. Current through Draw $LATEST_DRAW." \
+            "$NTFY_TOPIC"
 
       - name: Notify on failure
         if: ${{ failure() }}
