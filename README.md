@@ -8,9 +8,8 @@ Original dataset: [Singapore-Pools-Dataset](https://github.com/foooooooooooooooo
 
 ## Updates
 
-The 4D results file is automatically updated every Monday and should be current by Monday noon (Singapore time).
+The 4D results and Toto results files are automatically updated by noon Singapore Time the day after each draw( 4d: Thur, Sun and Monday. Toto: Tue and Fri).
 
-The TOTO results file is automatically updated every Tuesday and Friday and should be current by noon on those days (Singapore time).
 
 ## Dataset notes
 
