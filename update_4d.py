@@ -3,19 +3,28 @@
 Singapore Pools 4D updater / verifier.
 
 Examples:
-  python update_4d.py --csv 4d_prizes_updated_20260902.csv --verify 5528 5529 5530
-  python update_4d.py --csv 4d_prizes_updated_20260902.csv
-  python update_4d.py --csv 4d_prizes.csv
 
-The script:
-- fetches official Singapore Pools result pages by draw number
-- validates 1st/2nd/3rd + 10 Starter + 10 Consolation = 23 numbers
-- allows the same 4D number to appear more than once in a draw
-- can compare fetched draws against draws already in your CSV
-- appends only newer draws
-- preserves leading zeroes
-- refuses to overwrite suspicious/incomplete data
-- uses strict CSV validation rather than silently modifying bad numbers
+  python final.py4 --csv 4d_prizes.csv
+
+  python final.py4 --csv 4d_prizes.csv --verify 5542 5543 5544
+
+  python final.py4 --csv 4d_prizes.csv --max-new 50
+
+
+Behavior:
+
+- Fetches official Singapore Pools result pages by draw number.
+- Validates 1st/2nd/3rd + 10 Starter + 10 Consolation = 23 numbers.
+- Allows duplicate 4D numbers within the same draw.
+- Allows local CSV numbers to be in a different order.
+- Verification compares the 23 numbers as a MULTISET:
+    same numbers + same duplicate counts = match.
+- Existing incomplete historical draws are preserved and warned about.
+- Appends only newer draws.
+- Never overwrites existing draws.
+- Preserves leading zeroes.
+- Rejects malformed 4D numbers instead of silently modifying them.
+- Uses a temporary file before replacing the master CSV.
 """
 
 from __future__ import annotations
@@ -27,11 +36,16 @@ import html
 import re
 import sys
 import time
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
 
 RESULTS_URL = (
     "https://www.singaporepools.com.sg/en/product/pages/"
@@ -48,6 +62,12 @@ EXPECTED_NUMBERS_PER_DRAW = 23
 EXPECTED_STARTER = 10
 EXPECTED_CONSOLATION = 10
 
+REQUEST_DELAY_SECONDS = 0.5
+
+
+# ---------------------------------------------------------------------------
+# URL / HTTP
+# ---------------------------------------------------------------------------
 
 def draw_url(draw_no: int) -> str:
     """Build the Singapore Pools result URL for a draw number."""
@@ -59,7 +79,7 @@ def draw_url(draw_no: int) -> str:
 
 
 def fetch_html(draw_no: int, timeout: int = 30) -> str:
-    """Fetch the raw HTML for a draw."""
+    """Fetch raw HTML for a draw."""
     req = Request(
         draw_url(draw_no),
         headers={
@@ -81,12 +101,16 @@ def fetch_html(draw_no: int, timeout: int = 30) -> str:
     return raw.decode("utf-8", errors="replace")
 
 
+# ---------------------------------------------------------------------------
+# HTML parsing
+# ---------------------------------------------------------------------------
+
 def html_to_text(page: str) -> str:
     """
     Convert HTML to normalized text.
 
-    Scripts/styles are removed first so numbers embedded in JavaScript
-    do not contaminate result extraction.
+    Scripts and styles are removed first so numbers embedded in
+    JavaScript/CSS do not contaminate prize extraction.
     """
     page = re.sub(
         r"(?is)<script\b.*?</script>",
@@ -116,21 +140,30 @@ def parse_draw(
     page: str,
 ) -> tuple[str, list[str]]:
     """
-    Parse a Singapore Pools result page.
+    Parse one Singapore Pools draw.
 
     Returns:
-        (date_iso, numbers)
 
-    numbers are in this exact order:
-        1st
-        2nd
-        3rd
-        10 Starter
-        10 Consolation
+        (
+            date_as_YYYY/MM/DD,
+            [
+                1st,
+                2nd,
+                3rd,
+                starter x10,
+                consolation x10,
+            ],
+        )
+
+    The fetched source order is preserved.
     """
+
     text = html_to_text(page)
 
-    # Find the draw header and date.
+    # ---------------------------------------------------------------
+    # Locate draw header and date.
+    # ---------------------------------------------------------------
+
     marker = re.search(
         rf"4D Results.*?"
         rf"(?P<date>"
@@ -143,7 +176,7 @@ def parse_draw(
     )
 
     if not marker:
-        # Some page layouts omit the literal pipe after HTML is flattened.
+        # Some flattened page layouts do not retain the literal "|".
         marker = re.search(
             rf"4D Results.*?"
             rf"(?P<date>"
@@ -165,7 +198,10 @@ def parse_draw(
 
     tail = text[marker.end():]
 
+    # ---------------------------------------------------------------
     # Main prizes.
+    # ---------------------------------------------------------------
+
     m1 = re.search(
         r"\b1st Prize\s+(\d{4})\b",
         tail,
@@ -184,7 +220,10 @@ def parse_draw(
         re.I,
     )
 
-    # Starter section.
+    # ---------------------------------------------------------------
+    # Starter prizes.
+    # ---------------------------------------------------------------
+
     ms = re.search(
         r"\bStarter Prizes\b"
         r"(.*?)"
@@ -193,7 +232,10 @@ def parse_draw(
         re.I,
     )
 
-    # Consolation section.
+    # ---------------------------------------------------------------
+    # Consolation prizes.
+    # ---------------------------------------------------------------
+
     mc = re.search(
         r"\bConsolation Prizes\b"
         r"(.*?)"
@@ -220,6 +262,10 @@ def parse_draw(
         r"\b\d{4}\b",
         mc.group(1),
     )
+
+    # ---------------------------------------------------------------
+    # Validate exact section counts.
+    # ---------------------------------------------------------------
 
     if len(starter) != EXPECTED_STARTER:
         raise ValueError(
@@ -258,12 +304,17 @@ def parse_draw(
                 f"position {position}: {number!r}"
             )
 
-    # Keep source order because the downstream ranker infers
-    # prize tier from row position.
-    date_iso = datetime.strptime(
-        marker.group("date"),
-        "%a, %d %b %Y",
-    ).strftime("%Y/%m/%d")
+    # Parse source date.
+    try:
+        date_iso = datetime.strptime(
+            marker.group("date"),
+            "%a, %d %b %Y",
+        ).strftime("%Y/%m/%d")
+
+    except ValueError as e:
+        raise ValueError(
+            f"Draw {draw_no}: could not parse result date."
+        ) from e
 
     return date_iso, nums
 
@@ -276,6 +327,10 @@ def fetch_draw(draw_no: int) -> tuple[str, list[str]]:
     )
 
 
+# ---------------------------------------------------------------------------
+# CSV loading
+# ---------------------------------------------------------------------------
+
 def load_csv(
     path: Path,
 ) -> tuple[
@@ -283,12 +338,20 @@ def load_csv(
     dict[int, list[dict[str, str]]],
 ]:
     """
-    Load and strictly validate the CSV.
+    Load the CSV.
 
-    Important:
-    Repeated 4D numbers within the same draw are allowed.
-    What matters is that each draw contains exactly 23 rows.
+    Historical draws are allowed to have fewer/more than 23 rows.
+
+    This is intentional:
+    the updater should not block newer valid draws merely because
+    an old historical draw is incomplete.
+
+    However:
+    - draw numbers must be valid integers
+    - numbers must be exactly four digits
+    - dates cannot be blank
     """
+
     if not path.exists():
         raise SystemExit(
             f"Can't find CSV: {path.resolve()}"
@@ -318,12 +381,27 @@ def load_csv(
         by_draw: dict[int, list[dict[str, str]]] = {}
 
         for line_no, r in enumerate(reader, start=2):
-            raw_draw = str(r.get("draw_number", "")).strip()
-            raw_number = str(r.get("number", "")).strip()
-            raw_date = str(r.get("date", "")).strip()
 
-            # Strict draw-number validation.
-            if not re.fullmatch(r"\d+", raw_draw):
+            raw_draw = str(
+                r.get("draw_number", "")
+            ).strip()
+
+            raw_number = str(
+                r.get("number", "")
+            ).strip()
+
+            raw_date = str(
+                r.get("date", "")
+            ).strip()
+
+            # -------------------------------------------------------
+            # Strict draw number validation.
+            # -------------------------------------------------------
+
+            if not re.fullmatch(
+                r"\d+",
+                raw_draw,
+            ):
                 raise SystemExit(
                     f"Invalid draw number at CSV line "
                     f"{line_no}: {raw_draw!r}"
@@ -331,14 +409,16 @@ def load_csv(
 
             dn = int(raw_draw)
 
+            # -------------------------------------------------------
             # Strict 4D number validation.
             #
-            # Do NOT silently turn:
-            #   12345 -> 2345
-            #   ABC0529 -> 0529
-            #
-            # Bad source data should be rejected.
-            if not re.fullmatch(r"\d{4}", raw_number):
+            # Do NOT silently transform malformed data.
+            # -------------------------------------------------------
+
+            if not re.fullmatch(
+                r"\d{4}",
+                raw_number,
+            ):
                 raise SystemExit(
                     f"Invalid 4D number at CSV line "
                     f"{line_no}: {raw_number!r}. "
@@ -351,20 +431,31 @@ def load_csv(
                 )
 
             row = dict(r)
+
             row["draw_number"] = str(dn)
             row["number"] = raw_number
             row["date"] = raw_date
 
             rows.append(row)
-            by_draw.setdefault(dn, []).append(row)
 
-    # Validate the shape of every draw already in the CSV.
-    for draw_no, draw_rows in sorted(by_draw.items()):
+            by_draw.setdefault(
+                dn,
+                [],
+            ).append(row)
+
+    # ---------------------------------------------------------------
+    # Warn about historical problems but don't stop the updater.
+    # ---------------------------------------------------------------
+
+    for draw_no, draw_rows in sorted(
+        by_draw.items()
+    ):
         if len(draw_rows) != EXPECTED_NUMBERS_PER_DRAW:
-            raise SystemExit(
-                f"Draw {draw_no}: CSV contains "
+            print(
+                f"WARNING: Draw {draw_no}: CSV contains "
                 f"{len(draw_rows)} rows; expected "
-                f"{EXPECTED_NUMBERS_PER_DRAW}."
+                f"{EXPECTED_NUMBERS_PER_DRAW}. "
+                "Existing data will be preserved."
             )
 
         dates = {
@@ -372,14 +463,19 @@ def load_csv(
             for r in draw_rows
         }
 
-        if len(dates) != 1:
-            raise SystemExit(
-                f"Draw {draw_no}: CSV contains multiple dates: "
-                f"{sorted(dates)}"
+        if len(dates) > 1:
+            print(
+                f"WARNING: Draw {draw_no}: CSV contains "
+                f"multiple dates: {sorted(dates)}. "
+                "Existing data will be preserved."
             )
 
     return rows, by_draw
 
+
+# ---------------------------------------------------------------------------
+# Verification
+# ---------------------------------------------------------------------------
 
 def compare_draw(
     draw_no: int,
@@ -387,7 +483,29 @@ def compare_draw(
     fetched_date: str,
     fetched_nums: list[str],
 ) -> bool:
-    """Compare one fetched draw against local CSV rows."""
+    """
+    Compare local and fetched draw data.
+
+    IMPORTANT:
+    Numbers are compared as a MULTISET.
+
+    Therefore:
+
+        A B C C
+
+    matches:
+
+        C A C B
+
+    but does NOT match:
+
+        A B C D
+
+    This means:
+    - order does not matter
+    - duplicate counts do matter
+    """
+
     if len(local_rows) != EXPECTED_NUMBERS_PER_DRAW:
         print(
             f"Draw {draw_no}: LOCAL HAS "
@@ -414,22 +532,42 @@ def compare_draw(
         for r in local_rows
     }
 
-    nums_ok = local_nums == fetched_nums
+    # ---------------------------------------------------------------
+    # Date comparison remains exact.
+    # ---------------------------------------------------------------
 
     date_ok = (
         len(local_dates) == 1
         and next(iter(local_dates)) == fetched_date
     )
 
+    # ---------------------------------------------------------------
+    # Number comparison is order-independent AND duplicate-aware.
+    # ---------------------------------------------------------------
+
+    local_counter = Counter(local_nums)
+    fetched_counter = Counter(fetched_nums)
+
+    nums_ok = (
+        local_counter == fetched_counter
+    )
+
     if nums_ok and date_ok:
         print(
             f"Draw {draw_no}: "
-            f"{EXPECTED_NUMBERS_PER_DRAW}/{EXPECTED_NUMBERS_PER_DRAW} "
-            f"MATCH ✓  ({fetched_date})"
+            f"{EXPECTED_NUMBERS_PER_DRAW}/"
+            f"{EXPECTED_NUMBERS_PER_DRAW} "
+            f"NUMBERS MATCH ✓  ({fetched_date})"
         )
         return True
 
-    print(f"Draw {draw_no}: MISMATCH ✗")
+    print(
+        f"Draw {draw_no}: MISMATCH ✗"
+    )
+
+    # ---------------------------------------------------------------
+    # Date differences.
+    # ---------------------------------------------------------------
 
     if not date_ok:
         print(
@@ -439,33 +577,42 @@ def compare_draw(
             f"  fetched date:  {fetched_date}"
         )
 
+    # ---------------------------------------------------------------
+    # Number differences.
+    #
+    # Counter subtraction preserves duplicate counts.
+    # ---------------------------------------------------------------
+
     if not nums_ok:
-        for i, (local, fetched) in enumerate(
-            zip(local_nums, fetched_nums),
-            start=1,
-        ):
-            if local != fetched:
-                if i == 1:
-                    tier = "1st"
-                elif i == 2:
-                    tier = "2nd"
-                elif i == 3:
-                    tier = "3rd"
-                elif i <= 13:
-                    tier = "Starter"
-                else:
-                    tier = "Consolation"
 
-                print(
-                    f"  position {i:2d} ({tier}): "
-                    f"local={local} fetched={fetched}"
-                )
+        missing = (
+            fetched_counter - local_counter
+        )
 
-        if len(local_nums) != len(fetched_nums):
+        extra = (
+            local_counter - fetched_counter
+        )
+
+        if missing:
             print(
-                f"  row counts: "
-                f"local={len(local_nums)}, "
-                f"fetched={len(fetched_nums)}"
+                "  missing from local: "
+                + ", ".join(
+                    f"{number} x{count}"
+                    for number, count in sorted(
+                        missing.items()
+                    )
+                )
+            )
+
+        if extra:
+            print(
+                "  extra in local: "
+                + ", ".join(
+                    f"{number} x{count}"
+                    for number, count in sorted(
+                        extra.items()
+                    )
+                )
             )
 
     return False
@@ -475,7 +622,8 @@ def verify(
     csv_path: Path,
     draws: list[int],
 ) -> int:
-    """Verify requested draws."""
+    """Fetch and verify requested draw numbers."""
+
     _, by_draw = load_csv(csv_path)
 
     ok = True
@@ -485,6 +633,7 @@ def verify(
     )
 
     for dn in draws:
+
         if dn not in by_draw:
             print(
                 f"Draw {dn}: "
@@ -504,90 +653,50 @@ def verify(
             ok = False
             continue
 
-        ok = (
-            compare_draw(
-                dn,
-                by_draw[dn],
-                dt,
-                nums,
-            )
-            and ok
+        result = compare_draw(
+            dn,
+            by_draw[dn],
+            dt,
+            nums,
         )
 
-        time.sleep(0.5)
+        ok = result and ok
+
+        time.sleep(
+            REQUEST_DELAY_SECONDS
+        )
 
     print()
 
     if ok:
-        print("Verification PASSED ✓")
+        print(
+            "Verification PASSED ✓"
+        )
         return 0
 
-    print("Verification FAILED ✗")
+    print(
+        "Verification FAILED ✗"
+    )
     return 1
 
 
-def write_csv(
-    path: Path,
-    rows: list[dict[str, str]],
-    fieldnames: list[str],
-) -> None:
-    """
-    Write through a temporary file and replace the original.
-
-    This avoids leaving a partially written master CSV if the
-    process fails during normal writing.
-    """
-    tmp = path.with_suffix(
-        path.suffix + ".tmp"
-    )
-
-    try:
-        with tmp.open(
-            "w",
-            newline="",
-            encoding="utf-8",
-        ) as f:
-            writer = csv.DictWriter(
-                f,
-                fieldnames=fieldnames,
-                extrasaction="ignore",
-            )
-
-            writer.writeheader()
-            writer.writerows(rows)
-
-        tmp.replace(path)
-
-    except Exception:
-        # Best effort cleanup.
-        try:
-            tmp.unlink(missing_ok=True)
-        except Exception:
-            pass
-
-        raise
-
+# ---------------------------------------------------------------------------
+# Update validation
+# ---------------------------------------------------------------------------
 
 def validate_new_patch(
     new_rows: list[dict[str, str]],
     existing_draws: set[int],
 ) -> None:
     """
-    Validate fetched rows before touching the master CSV.
+    Validate fetched draws before writing.
 
-    Repeated numbers are explicitly allowed.
+    Duplicate numbers are explicitly allowed.
 
-    Example:
-        5543,0529
-        5543,0529
-
-    is not automatically invalid.
-
-    Instead, we verify:
-    - every new draw has exactly 23 rows
-    - every number is four digits
-    - no fetched draw already exists locally
+    We validate the draw as a collection of 23 rows,
+    not as 23 unique numbers.
     """
+
     new_draws = sorted(
         {
             int(r["draw_number"])
@@ -595,7 +704,12 @@ def validate_new_patch(
         }
     )
 
+    # ---------------------------------------------------------------
+    # Every fetched draw must contain exactly 23 rows.
+    # ---------------------------------------------------------------
+
     for draw_no in new_draws:
+
         draw_rows = [
             r
             for r in new_rows
@@ -610,11 +724,15 @@ def validate_new_patch(
                 "Refusing to save."
             )
 
-        for position, r in enumerate(
+        # -----------------------------------------------------------
+        # Every fetched number must be four digits.
+        # -----------------------------------------------------------
+
+        for position, row in enumerate(
             draw_rows,
             start=1,
         ):
-            number = r["number"]
+            number = row["number"]
 
             if not re.fullmatch(
                 r"\d{4}",
@@ -623,11 +741,16 @@ def validate_new_patch(
                 raise SystemExit(
                     f"Draw {draw_no}: invalid 4D number "
                     f"at position {position}: "
-                    f"{number!r}. Refusing to save."
+                    f"{number!r}. "
+                    "Refusing to save."
                 )
 
-    # The updater is append-only. A fetched draw must not already
-    # exist in the master CSV.
+    # ---------------------------------------------------------------
+    # Append-only protection.
+    #
+    # A fetched draw must not already exist in the CSV.
+    # ---------------------------------------------------------------
+
     overlap = (
         set(new_draws)
         & existing_draws
@@ -640,17 +763,73 @@ def validate_new_patch(
         )
 
 
+# ---------------------------------------------------------------------------
+# CSV writing
+# ---------------------------------------------------------------------------
+
+def write_csv(
+    path: Path,
+    rows: list[dict[str, str]],
+    fieldnames: list[str],
+) -> None:
+    """
+    Write through a temporary file and atomically replace
+    the master where supported.
+    """
+
+    tmp = path.with_suffix(
+        path.suffix + ".tmp"
+    )
+
+    try:
+
+        with tmp.open(
+            "w",
+            newline="",
+            encoding="utf-8",
+        ) as f:
+
+            writer = csv.DictWriter(
+                f,
+                fieldnames=fieldnames,
+                extrasaction="ignore",
+            )
+
+            writer.writeheader()
+            writer.writerows(rows)
+
+        tmp.replace(path)
+
+    except Exception:
+
+        try:
+            tmp.unlink(
+                missing_ok=True
+            )
+        except Exception:
+            pass
+
+        raise
+
+
+# ---------------------------------------------------------------------------
+# Update
+# ---------------------------------------------------------------------------
+
 def update(
     csv_path: Path,
     max_new: int = 50,
 ) -> int:
-    """Fetch and append newer completed draws."""
+    """Find and append newer completed draws."""
+
     if max_new < 1:
         raise SystemExit(
             "--max-new must be at least 1."
         )
 
-    rows, by_draw = load_csv(csv_path)
+    rows, by_draw = load_csv(
+        csv_path
+    )
 
     if not by_draw:
         raise SystemExit(
@@ -662,9 +841,11 @@ def update(
     print(
         f"Master:    {csv_path.resolve()}"
     )
+
     print(
         f"Last draw: {last}"
     )
+
     print(
         "Checking for newer completed draws..."
     )
@@ -673,29 +854,35 @@ def update(
 
     dn = last + 1
 
+    # ---------------------------------------------------------------
+    # Search forward until the first unavailable draw.
+    # ---------------------------------------------------------------
+
     for _ in range(max_new):
+
         try:
             dt, nums = fetch_draw(dn)
 
         except ValueError as e:
-            # A missing/unpublished draw is our normal stopping point.
+            # Normal stopping condition:
+            # draw does not exist / has not been published / layout
+            # did not contain a valid result header.
             print(
                 f"Stop at {dn}: {e}"
             )
             break
 
         except RuntimeError as e:
-            # Network/server errors must NOT be treated as
-            # "no new draw".
+            # Network/server problems are NOT treated as "no draw".
             print(
-                f"Network error while checking draw "
-                f"{dn}: {e}",
+                f"Network error while checking "
+                f"draw {dn}: {e}",
                 file=sys.stderr,
             )
             return 2
 
         except Exception as e:
-            # Unexpected parsing errors should also fail safely.
+            # Unexpected parser errors also fail safely.
             print(
                 f"Unexpected error while checking "
                 f"draw {dn}: {e}",
@@ -703,7 +890,10 @@ def update(
             )
             return 2
 
+        # -----------------------------------------------------------
         # Extra safety check.
+        # -----------------------------------------------------------
+
         if len(nums) != EXPECTED_NUMBERS_PER_DRAW:
             print(
                 f"Draw {dn}: parser returned "
@@ -718,6 +908,18 @@ def update(
             f"{EXPECTED_NUMBERS_PER_DRAW} numbers ✓"
         )
 
+        # -----------------------------------------------------------
+        # IMPORTANT:
+        # Do NOT deduplicate these numbers.
+        #
+        # If the official result contains:
+        #
+        #   0529
+        #   0529
+        #
+        # both rows must be preserved.
+        # -----------------------------------------------------------
+
         for number in nums:
             new_rows.append(
                 {
@@ -728,7 +930,10 @@ def update(
             )
 
         dn += 1
-        time.sleep(0.5)
+
+        time.sleep(
+            REQUEST_DELAY_SECONDS
+        )
 
     else:
         raise SystemExit(
@@ -737,22 +942,38 @@ def update(
             "Refusing to continue automatically."
         )
 
+    # ---------------------------------------------------------------
+    # Nothing new.
+    # ---------------------------------------------------------------
+
     if not new_rows:
         print(
             "Already current. Nothing to append."
         )
         return 0
 
-    # Validate everything before touching the master CSV.
+    # ---------------------------------------------------------------
+    # Validate everything before modifying the master.
+    # ---------------------------------------------------------------
+
     validate_new_patch(
         new_rows,
         set(by_draw),
     )
 
-    # Preserve original CSV column order.
-    fieldnames = list(rows[0].keys())
+    # ---------------------------------------------------------------
+    # Preserve the existing CSV column order.
+    # ---------------------------------------------------------------
+
+    fieldnames = list(
+        rows[0].keys()
+    )
 
     combined = rows + new_rows
+
+    # ---------------------------------------------------------------
+    # Write only after all validation succeeds.
+    # ---------------------------------------------------------------
 
     write_csv(
         csv_path,
@@ -791,8 +1012,13 @@ def update(
     return 0
 
 
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
 def main() -> int:
     """Command-line entry point."""
+
     ap = argparse.ArgumentParser(
         description=(
             "Singapore Pools 4D updater / verifier"
@@ -814,7 +1040,8 @@ def main() -> int:
         type=int,
         help=(
             "Fetch these draw numbers and compare "
-            "them exactly against the local CSV."
+            "their 23 numbers against the local CSV. "
+            "Order does not matter, but duplicate counts do."
         ),
     )
 
@@ -835,7 +1062,9 @@ def main() -> int:
             "--max-new must be at least 1"
         )
 
-    csv_path = Path(args.csv)
+    csv_path = Path(
+        args.csv
+    )
 
     if args.verify:
         return verify(
@@ -850,4 +1079,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(
+        main()
+    )
